@@ -1,6 +1,6 @@
 from dijkstar import Graph, find_path
 from typing import Callable
-from copy import deepcopy, copy
+from copy import copy
 
 INF = 9999999999
 
@@ -166,12 +166,14 @@ class Flow:
 
 
 class Solution:
-    def __init__(self, network: 'Network', flows: list['Flow'], max_delay: float):
+    def __init__(self, network: 'Network', flows: list['Flow'], max_delay: float, priority_scale=1):
         self.net = network
         self.flows = flows
         self.max_delay = max_delay
+        self.priority_scale = priority_scale
 
         for flow in self.flows:
+            flow.priority = 1 + (flow.priority - 1) * priority_scale
             flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_inverse_cap).edges)
 
         self.bestPaths = dict()
