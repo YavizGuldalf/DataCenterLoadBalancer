@@ -1,5 +1,6 @@
 from dijkstar import Graph, find_path
 from typing import Callable
+from copy import deepcopy, copy
 
 INF = 9999999999
 
@@ -173,8 +174,7 @@ class Solution:
         for flow in self.flows:
             flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_inverse_cap).edges)
 
-        # Optional solution history
-        self.bestPaths = None
+        self.bestPaths = dict()
         self.bestAvgDelay = INF
 
     def is_feasible(self):
@@ -231,7 +231,34 @@ class Solution:
         return weighted_delay/traffic
 
     def minimize_avg_delay(self):
-        pass
+        # Make sure to call this function after a feasible solution is reached
+        for flow in self.flows:
+            self.bestPaths[f"{flow.source}-{flow.dest}"] = copy(flow.path)
+        self.bestAvgDelay = self.get_avg_delay()
+
+        sim_ann_offshoot = 0.15
+        sim_ann_cooling_factor = 0.8
+        sim_ann_continue = True
+
+        while sim_ann_continue:
+            sim_ann_continue = False
+
+            for flow in self.flows:  # TODO: Introduce randomness/prioritization here
+                old_path = flow.path
+                flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_priority_derivative).edges)
+                new_avg_delay = self.get_avg_delay()
+                if new_avg_delay > self.bestAvgDelay * (1 + sim_ann_offshoot) or not self.is_feasible():
+                    flow.assign_path(old_path)
+                elif new_avg_delay < self.bestAvgDelay:
+                    sim_ann_continue = True
+                    for f in self.flows:
+                        self.bestPaths[f"{f.source}-{f.dest}"] = copy(f.path)
+                    self.bestAvgDelay = new_avg_delay
+
+            sim_ann_offshoot *= sim_ann_cooling_factor
+
+        for flow in self.flows:
+            flow.assign_path(self.bestPaths[f"{flow.source}-{flow.dest}"])
 
     def __repr__(self):
         rep = ''
@@ -257,34 +284,36 @@ def cf_derivative(u: 'Node', v: 'Node', e: 'Connection', pe: 'Connection'):
     return e.cap / (e.cap - e.total_flow)**2 if e.cap - e.total_flow > 0 else INF
 
 
+def cf_priority_derivative(u: 'Node', v: 'Node', e: 'Connection', pe: 'Connection'):
+    return e.cap * e.avg_priority / (e.cap - e.total_flow)**2 if e.cap - e.total_flow > 0 else INF
+
+
 NT = Network.generate('NT', 3, [2, 3, 6], [200, 100],
                       [2, 2], {('8', '3'): 50, ('10', '4'): 50, ('6', '3'): 50})
 
-print(NT.connections)
-print(NT.graph)
-print(NT.get_shortest_path(NT.get_node(3, 2), NT.get_node(3, 0),
-                           lambda u, v, e, pe: 1 / e.cap))
 
 f = [Flow(Node.get(5), Node.get(6), 10),
-     Flow(Node.get(5), Node.get(8), 30),
-     Flow(Node.get(5), Node.get(10), 15),
-     Flow(Node.get(10), Node.get(5), 20),
+     Flow(Node.get(5), Node.get(8), 30, 2),
+     Flow(Node.get(5), Node.get(10), 15, 2),
+     Flow(Node.get(10), Node.get(5), 20, 3),
      Flow(Node.get(8), Node.get(6), 30),
      Flow(Node.get(0), Node.get(9), 50),
      Flow(Node.get(1), Node.get(9), 50),
      Flow(Node.get(0), Node.get(5), 15),
-     Flow(Node.get(1), Node.get(8), 10),
-     Flow(Node.get(6), Node.get(9), 10),
+     Flow(Node.get(1), Node.get(8), 10, 3),
+     Flow(Node.get(6), Node.get(9), 10, 2),
      Flow(Node.get(7), Node.get(8), 10),
      Flow(Node.get(7), Node.get(10), 15),
      Flow(Node.get(7), Node.get(5), 10),
      Flow(Node.get(0), Node.get(7), 20),
      Flow(Node.get(0), Node.get(10), 30),
-     Flow(Node.get(9), Node.get(6), 10)]
+     Flow(Node.get(9), Node.get(6), 10, 5)]
 
-S = Solution(NT, f, 0.04)
+S = Solution(NT, f, 0.6)
+print(S.get_avg_delay())
+print(f"Solution is feasible = {S.make_feasible()}")
 print(S)
 print(S.get_avg_delay())
-S.make_feasible()
+S.minimize_avg_delay()
 print(S)
 print(S.get_avg_delay())
