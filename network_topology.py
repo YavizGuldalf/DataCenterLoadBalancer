@@ -20,12 +20,12 @@ class Network:
             nodes = [self.tiers[tier_no].get_node(i) for tier_no in range(len(self.tiers))
                      for i in range(len(self.tiers[tier_no].nodes))]
         else:
-            nodes = [self.tiers[tier_no-1].get_node(i) for tier_no in tiers
-                     for i in range(len(self.tiers[tier_no-1].nodes))]
+            nodes = [self.tiers[tier_no - 1].get_node(i) for tier_no in tiers
+                     for i in range(len(self.tiers[tier_no - 1].nodes))]
         return nodes
 
     def get_node(self, tier_no, index):
-        return self.tiers[tier_no-1].get_node(index)
+        return self.tiers[tier_no - 1].get_node(index)
 
     def get_shortest_path(self, source: 'Node', destination: 'Node',
                           cost_func: Callable[['Node', 'Node', 'Connection', 'Connection'], float | int]):
@@ -45,10 +45,10 @@ class Network:
         tiers = list()
         node_num = 0
         for tier_no in range(num_tiers):
-            tier = Tier(str(tier_no + 1), [])
+            tier = Tier(tier_no + 1, [])
             tiers.append(tier)
             for _ in range(num_nodes_per_tier[tier_no]):
-                tier.add(Node(str(node_num), tier))
+                tier.add(Node(node_num, tier))
                 node_num += 1
 
         connections = list()
@@ -61,13 +61,13 @@ class Network:
                         cap = asymmetries.get((node1.id, node2.id))
                     else:
                         cap = default_connection_cap[tier_no - 1]
-                    connections.append(Connection(f"{node1.id}-{node2.id}", node1, node2, cap))
+                    connections.append(Connection(node1, node2, cap))
 
         return cls(name, tiers, connections)
 
 
 class Tier:
-    def __init__(self, tier_id: str, nodes: list['Node']):
+    def __init__(self, tier_id: int, nodes: list['Node']):
         self.nodes = nodes
         self.id = tier_id
 
@@ -82,39 +82,61 @@ class Tier:
 
 
 class Node:
-    def __init__(self, node_id: str, tier: Tier):
+    index = dict()
+
+    @staticmethod
+    def get(node_id):
+        return Node.index[node_id]
+
+    def __init__(self, node_id: int, tier: Tier):
         self.id = node_id
         self.tier = tier
+        Node.index[node_id] = self
 
     def __repr__(self):
-        return self.id
+        return str(self.id)
 
 
 class Connection:
-    def __init__(self, connection_id, node1, node2, capacity, flows: list['Flow'] = None):
+    index = dict()
+
+    @staticmethod
+    def get(n1_id, n2_id):
+        return Connection.index[(n1_id, n2_id)]
+
+    def __init__(self, node1, node2, capacity):
         self.n1 = node1
         self.n2 = node2
-        self.id = connection_id
         self.cap = capacity
-        self.flows = flows
-        self.length = 1/capacity
+        self.flows = set()
+        self.total_flow = 0
+        self.avg_priority = 0
+        Connection.index[(self.n1.id, self.n2.id)] = self
+
+    def add_flow(self, flow: 'Flow'):
+        self.flows.add(flow)
+        self.avg_priority = ((self.avg_priority * self.total_flow + flow.priority * flow.size)
+                             / (self.total_flow + flow.size))
+        self.total_flow += flow.size
+
+    def rm_flow(self, flow: 'Flow'):
+        self.flows.remove(flow)
+        self.avg_priority = 0 if self.total_flow == flow.size else (
+                (self.avg_priority * self.total_flow - flow.priority * flow.size) / (self.total_flow - flow.size))
+        self.total_flow -= flow.size
 
     def __repr__(self):
         return f"{self.n1.id}<-{self.cap}->{self.n2.id}"
 
-    def get_total_flow(self):
-        return sum([f.size for f in self.flows])
-
     def get_exp_time(self):
-        tf = self.get_total_flow()
-        if tf < self.cap:
-            return 1 / (self.cap - tf)
+        if self.total_flow < self.cap:
+            return 1 / (self.cap - self.total_flow)
         else:
             return INF
 
 
 class Flow:
-    def __init__(self, source: Node, dest: Node, size, priority=1):
+    def __init__(self, source: Node, dest: Node, size: float, priority=1):
         self.source = source
         self.dest = dest
         self.priority = priority
@@ -122,16 +144,147 @@ class Flow:
         self.path = []
 
     def assign_path(self, path: list['Connection']):
+        for connection in self.path:
+            connection.rm_flow(self)
         self.path = path
+        for connection in self.path:
+            connection.add_flow(self)
 
     def get_e2e_delay(self):
-        return sum(c.get_exp_time for c in self.path)
+        return sum(c.get_exp_time() for c in self.path)
+
+    def get_node_path(self):
+        node_path = [self.source]
+        for conn in self.path:
+            node_path.append(conn.n2 if conn.n2 != node_path[-1] else conn.n1)
+        return node_path
+
+    def __repr__(self):
+        return (f"Flow from node {self.source} to node {self.dest}, through the path {self.get_node_path()} "
+                f"with e2e delay {self.get_e2e_delay()}")
+
+
+class Solution:
+    def __init__(self, network: 'Network', flows: list['Flow'], max_delay: float):
+        self.net = network
+        self.flows = flows
+        self.max_delay = max_delay
+
+        for flow in self.flows:
+            flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_inverse_cap).edges)
+
+        # Optional solution history
+        self.bestPaths = None
+        self.bestAvgDelay = INF
+
+    def is_feasible(self):
+        for flow in self.flows:
+            if flow.get_e2e_delay() > self.max_delay:
+                return False
+        return True
+
+    def make_feasible(self):
+        max_iter = 10
+        iteration = 0
+        while not self.is_feasible() and iteration < max_iter:
+            iteration += 1
+            for flow in self.flows:
+                if flow.get_e2e_delay() > self.max_delay:
+                    flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_gen_flow_delay(flow)).edges)
+        iteration = 0
+        while not self.is_feasible() and iteration < max_iter:
+            iteration += 1
+            for flow in self.flows:
+                if flow.get_e2e_delay() > self.max_delay:
+                    buddies = set()  # The set of flows with which this flow shares at least one route
+                    for conn in flow.path:
+                        buddies.update(conn.flows)
+                    buddies.remove(flow)
+
+                    buddies = sorted(buddies, key=lambda b: b.size)  # Start from the smallest buddies
+
+                    for buddy in buddies:
+                        buddy.assign_path(self.net.get_shortest_path(
+                            buddy.source, buddy.dest, cf_derivative).edges)
+                        if flow.get_e2e_delay() <= self.max_delay:  # Stop when the desired delay is reached
+                            break
+        iteration = 0
+        while not self.is_feasible() and iteration < max_iter:
+            iteration += 1
+            for flow in self.flows:
+                if flow.get_e2e_delay() > self.max_delay:
+                    flow.assign_path(self.net.get_shortest_path(flow.source, flow.dest, cf_gen_flow_delay(flow)).edges)
+
+        if self.is_feasible():
+            return True
+        else:
+            return False
+
+    def get_avg_delay(self):
+        weighted_delay = 0
+        for conn in self.net.connections:
+            weighted_delay += conn.total_flow * conn.get_exp_time() * conn.avg_priority
+
+        traffic = 0
+        for flow in self.flows:
+            traffic += flow.size
+        return weighted_delay/traffic
+
+    def minimize_avg_delay(self):
+        pass
+
+    def __repr__(self):
+        rep = ''
+        for flow in S.flows:
+            rep += str(flow) + '\n'
+        return rep
+
+
+def cf_inverse_cap(u: 'Node', v: 'Node', e: 'Connection', pe: 'Connection'):
+    return 1 / e.cap
+
+
+def cf_gen_flow_delay(flow):
+    def cost_func(u: 'Node', v: 'Node', e: 'Connection', pe: 'Connection'):
+        if flow in e.flows:
+            return 1 / (e.cap - e.total_flow) if e.cap - e.total_flow > 0 else INF
+        else:
+            return 1 / (e.cap - e.total_flow - flow.size) if e.cap - e.total_flow - flow.size > 0 else INF
+    return cost_func
+
+
+def cf_derivative(u: 'Node', v: 'Node', e: 'Connection', pe: 'Connection'):
+    return e.cap / (e.cap - e.total_flow)**2 if e.cap - e.total_flow > 0 else INF
 
 
 NT = Network.generate('NT', 3, [2, 3, 6], [200, 100],
-                      [2, 2], {('7', '2'): 10})
+                      [2, 2], {('8', '3'): 50, ('10', '4'): 50, ('6', '3'): 50})
 
 print(NT.connections)
 print(NT.graph)
 print(NT.get_shortest_path(NT.get_node(3, 2), NT.get_node(3, 0),
-                           lambda u, v, e, pe: 1/e.cap))
+                           lambda u, v, e, pe: 1 / e.cap))
+
+f = [Flow(Node.get(5), Node.get(6), 10),
+     Flow(Node.get(5), Node.get(8), 30),
+     Flow(Node.get(5), Node.get(10), 15),
+     Flow(Node.get(10), Node.get(5), 20),
+     Flow(Node.get(8), Node.get(6), 30),
+     Flow(Node.get(0), Node.get(9), 50),
+     Flow(Node.get(1), Node.get(9), 50),
+     Flow(Node.get(0), Node.get(5), 15),
+     Flow(Node.get(1), Node.get(8), 10),
+     Flow(Node.get(6), Node.get(9), 10),
+     Flow(Node.get(7), Node.get(8), 10),
+     Flow(Node.get(7), Node.get(10), 15),
+     Flow(Node.get(7), Node.get(5), 10),
+     Flow(Node.get(0), Node.get(7), 20),
+     Flow(Node.get(0), Node.get(10), 30),
+     Flow(Node.get(9), Node.get(6), 10)]
+
+S = Solution(NT, f, 0.04)
+print(S)
+print(S.get_avg_delay())
+S.make_feasible()
+print(S)
+print(S.get_avg_delay())
