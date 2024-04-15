@@ -84,7 +84,7 @@ class Tier:
 class Node:
     def __init__(self, node_id: str, tier: Tier):
         self.id = node_id
-        self.tier = Tier
+        self.tier = tier
 
     def __repr__(self):
         return self.id
